@@ -161,33 +161,7 @@ function renderCreateChar() {
       <div class="stat">軽減 ${Math.round(a.reduction*100)}% | 回避 ${a.dodgeMod>=0?'+':''}${a.dodgeMod}%</div>
     </div>`).join('');
 
-  // パッシブスキル（全ツリーから）
-  const passiveSkills = Object.values(SKILLS).filter(s => s.type === 'passive');
-  const passiveOpts = passiveSkills.map(s => {
-    const sel = f.passives.includes(s.id);
-    const dis = !sel && f.passives.length >= 3;
-    return `
-      <div class="select-item ${sel?'selected':''} ${dis?'':''}` +
-      `" onclick="${dis?'':'togglePassive(\''+s.id+'\')'}" style="${dis?'opacity:0.4':''}">
-        <h4>${TREE_NAMES[s.tree]} ${s.name}</h4>
-        <p>${s.desc}</p>
-      </div>`;
-  }).join('');
-
-  // アクティブスキル（全ツリーから）
-  const activeSkills = Object.values(SKILLS).filter(s => s.type === 'active');
-  const activeOpts = activeSkills.map(s => {
-    const sel = f.actives.includes(s.id);
-    const dis = !sel && f.actives.length >= 2;
-    return `
-      <div class="select-item ${sel?'selected':''}" onclick="${dis?'':'toggleActive(\''+s.id+'\')'}" style="${dis?'opacity:0.4':''}">
-        <h4>${TREE_NAMES[s.tree]} ${s.name}</h4>
-        <p>${s.desc}</p>
-        <div class="stat">CT:${s.ct}T | AP:${s.apCost}</div>
-      </div>`;
-  }).join('');
-
-  const canCreate = f.name.trim() && f.weaponId && f.armorId && f.passives.length>0 && f.actives.length>0;
+  const canCreate = f.name.trim() && f.weaponId && f.armorId;
 
   render(`
     <div class="header">
@@ -207,13 +181,11 @@ function renderCreateChar() {
         <div class="label">防具を選択</div>
         <div class="select-grid">${armorOpts}</div>
 
-        <div class="label">パッシブスキル（最大3つ）— ${f.passives.length}/3 選択中</div>
-        <div class="select-grid">${passiveOpts}</div>
+        <div class="card" style="margin-top:16px;color:var(--text2);font-size:13px;text-align:center">
+          💡 スキルはレベルアップ後にキャラ詳細から習得できます
+        </div>
 
-        <div class="label">アクティブスキル（最大2つ）— ${f.actives.length}/2 選択中</div>
-        <div class="select-grid">${activeOpts}</div>
-
-        <div style="margin-top:20px">
+        <div style="margin-top:16px">
           <button class="btn btn-primary" ${canCreate?'':'disabled'} onclick="createChar()">
             キャラクターを作成
           </button>
@@ -248,8 +220,8 @@ function createChar() {
     icon: CHAR_ICONS[Math.floor(Math.random() * CHAR_ICONS.length)],
     weaponId: f.weaponId,
     armorId: f.armorId,
-    passiveSkills: [...f.passives],
-    activeSkills: [...f.actives],
+    passiveSkills: [],
+    activeSkills: [],
     level: 1,
     exp: 0,
     isNPC: false,
