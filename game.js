@@ -62,6 +62,8 @@ let S = {
   clearedBosses: [],   // 撃破済みボスID一覧
   battle: null,
   lobby: null,
+  partyTemplates: [null, null, null],  // { npc1Id, npc2Id, npc3Id, positions }
+  itemTemplates:  [null, null, null],  // { items: [id,id,id] }
   // 作成中フォームの一時データ
   createForm: { name:'', weaponId:'', armorId:'', passives:[], actives:[] },
 };
@@ -225,7 +227,7 @@ function renderRadarChart(st) {
       <text x="${lx.toFixed(1)}" y="${(ly + 8).toFixed(1)}" text-anchor="${anchor}" font-size="11" fill="#c9d1d9" font-weight="bold" font-family="sans-serif">${rawVals[i]}${units[i]}</text>`;
   }).join('');
 
-  return `<svg width="190" height="190" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
+  return `<svg width="210" height="210" viewBox="-15 -15 250 250" xmlns="http://www.w3.org/2000/svg">
     ${grids}${axes}
     <polygon points="${dataPts}" fill="rgba(88,166,255,0.20)" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
     ${labelEls}
@@ -698,9 +700,11 @@ function openLobby() {
     myCharIndex: 0,
     npc1: null,
     npc2: null,
+    npc3: null,
     items: [null, null, null],
-    selectingNPC: null,   // 1 or 2
-    selectingItem: null,  // 0,1,2
+    selectingNPC: null,
+    selectingItem: null,
+    positions: { 0: 'front', 1: 'mid', 2: 'back', 3: 'mid' }, // 0=自分・1=NPC1・2=NPC2・3=NPC3
   };
   showScreen('lobby');
 }
@@ -711,18 +715,36 @@ function renderLobby() {
   const myChar = S.characters[lb.myCharIndex];
   const st = calcStats(myChar);
 
+  // ポジション選択ボタン
+  const POS_ORDER = ['front','mid','back'];
+  function posSelector(slotIdx) {
+    const cur = lb.positions[slotIdx];
+    return `<div style="display:flex;gap:3px;margin-top:5px;justify-content:center">
+      ${POS_ORDER.map(pos => `
+        <button onclick="setLobbyPosition(${slotIdx},'${pos}')" style="
+          font-size:10px;padding:2px 7px;border-radius:4px;border:none;cursor:pointer;
+          background:${cur===pos?'var(--accent)':'var(--bg2)'};
+          color:${cur===pos?'#0d1117':'var(--text2)'};
+          font-weight:${cur===pos?'700':'400'}">
+          ${POS_NAMES[pos]}
+        </button>`).join('')}
+    </div>`;
+  }
+
   // パーティスロット表示
-  function slotHtml(char, label, isNPC) {
+  function slotHtml(char, label, slotIdx) {
     if (char) {
-      return `<div class="lobby-slot filled">
+      return `<div class="lobby-slot filled" style="padding-bottom:6px">
         <div class="ls-label">${label}</div>
-        <div class="ls-name">${char.icon||'🤖'} ${char.name}</div>
+        <div class="ls-name" style="display:flex;align-items:center;gap:5px">${charAvatarHtml(char,20)} ${char.name}</div>
         <div class="ls-sub">${WEAPONS[char.weaponId]?.name || '?'}</div>
+        ${posSelector(slotIdx)}
       </div>`;
     }
-    return `<div class="lobby-slot">
+    return `<div class="lobby-slot" style="padding-bottom:6px">
       <div class="ls-label">${label}</div>
       <div class="ls-name" style="color:var(--text2)">未選択</div>
+      ${posSelector(slotIdx)}
     </div>`;
   }
 
@@ -756,6 +778,33 @@ function renderLobby() {
         <p>${WEAPONS[n.weaponId]?.name} | Lv.${n.level}</p>
       </div>
     </div>`).join('');
+
+  // テンプレートスロットUI生成
+  function templateSlotsHtml(type) {
+    const templates = type === 'party' ? (S.partyTemplates||[null,null,null]) : (S.itemTemplates||[null,null,null]);
+    const saveLabel = type === 'party' ? 'パーティテンプレ' : 'アイテムテンプレ';
+    const saveFn  = type === 'party' ? 'savePartyTemplate'  : 'saveItemTemplate';
+    const loadFn  = type === 'party' ? 'loadPartyTemplate'  : 'loadItemTemplate';
+    const delFn   = type === 'party' ? 'deletePartyTemplate': 'deleteItemTemplate';
+    const slots = [0,1,2].map(i => {
+      const t = templates[i];
+      return `<div style="flex:1;border:1px solid var(--border);border-radius:6px;padding:5px 4px;text-align:center">
+        <div style="font-size:10px;color:var(--text2);margin-bottom:4px">スロット${i+1}</div>
+        ${t
+          ? `<button onclick="${loadFn}(${i})" style="font-size:10px;padding:2px 6px;border-radius:4px;border:none;cursor:pointer;background:var(--accent);color:#0d1117;font-weight:700;width:100%;margin-bottom:3px">読込</button>
+             <div style="display:flex;gap:3px">
+               <button onclick="${saveFn}(${i})" style="font-size:10px;padding:2px 4px;border-radius:4px;border:none;cursor:pointer;background:var(--bg3);color:var(--text);flex:1">上書</button>
+               <button onclick="${delFn}(${i})" style="font-size:10px;padding:2px 4px;border-radius:4px;border:none;cursor:pointer;background:var(--bg3);color:var(--danger);flex:1">削除</button>
+             </div>`
+          : `<button onclick="${saveFn}(${i})" style="font-size:10px;padding:2px 6px;border-radius:4px;border:none;cursor:pointer;background:var(--bg3);color:var(--text2);width:100%">保存</button>`
+        }
+      </div>`;
+    }).join('');
+    return `<div style="margin-top:8px">
+      <div style="font-size:11px;color:var(--text2);margin-bottom:5px">${saveLabel}</div>
+      <div style="display:flex;gap:6px">${slots}</div>
+    </div>`;
+  }
 
   // アイテムスロット
   const itemSlotsHtml = lb.items.map((it, i) => {
@@ -852,33 +901,53 @@ function renderLobby() {
             <span class="stat-name">獲得EXP</span>
             <span class="stat-value">${boss.drops.expReward.toLocaleString()}</span>
           </div>
-          <div class="stat-row">
-            <span class="stat-name">クリア報酬</span>
-            <span class="stat-value r-rare">レア以上の武器確定</span>
+          <div class="stat-row" style="align-items:flex-start">
+            <span class="stat-name" style="padding-top:2px">ドロップ武器</span>
+            <div style="display:flex;flex-direction:column;gap:3px;text-align:right">
+              ${(() => {
+                const rc = { common:'r-common', uncommon:'r-uncommon', rare:'r-rare', epic:'r-epic', legend:'r-legend' };
+                const rl = { common:'COMMON', uncommon:'UNCOMMON', rare:'RARE', epic:'EPIC', legend:'LEGEND' };
+                const hw = boss.drops.weapons.find(w => w.highlight) || boss.drops.weapons[0];
+                return `<span style="font-size:11px"><span class="${rc[hw.rarity]||'r-rare'}" style="font-weight:700">[${rl[hw.rarity]||hw.rarity.toUpperCase()}]</span> ${hw.name} <span style="color:var(--text2)">など</span></span>`;
+              })()}
+            </div>
           </div>
         </div>
 
         <div class="label">パーティ編成</div>
         <div class="lobby-party-slots">
-          ${slotHtml(myChar, '自分', false)}
-          <div class="lobby-slot ${lb.npc1?'filled':''}" onclick="openNPCPicker(1)" style="cursor:pointer">
-            <div class="ls-label">NPC ①</div>
+          ${slotHtml(myChar, '自分', 0)}
+          <div class="lobby-slot ${lb.npc1?'filled':''}" style="padding-bottom:6px">
+            <div class="ls-label" onclick="openNPCPicker(1)" style="cursor:pointer">NPC ① ＋</div>
             ${lb.npc1
               ? `<div class="ls-name" style="display:flex;align-items:center;gap:5px">${charAvatarHtml(lb.npc1,20)} ${lb.npc1.name}</div><div class="ls-sub">${WEAPONS[lb.npc1.weaponId]?.name}</div>`
-              : `<div class="ls-name" style="color:var(--accent);font-size:12px">＋ 選択</div>`
+              : `<div class="ls-name" style="color:var(--accent);font-size:12px;cursor:pointer" onclick="openNPCPicker(1)">＋ 選択</div>`
             }
+            ${posSelector(1)}
           </div>
-          <div class="lobby-slot ${lb.npc2?'filled':''}" onclick="openNPCPicker(2)" style="cursor:pointer">
-            <div class="ls-label">NPC ②</div>
+          <div class="lobby-slot ${lb.npc2?'filled':''}" style="padding-bottom:6px">
+            <div class="ls-label" onclick="openNPCPicker(2)" style="cursor:pointer">NPC ② ＋</div>
             ${lb.npc2
               ? `<div class="ls-name" style="display:flex;align-items:center;gap:5px">${charAvatarHtml(lb.npc2,20)} ${lb.npc2.name}</div><div class="ls-sub">${WEAPONS[lb.npc2.weaponId]?.name}</div>`
-              : `<div class="ls-name" style="color:var(--accent);font-size:12px">＋ 選択</div>`
+              : `<div class="ls-name" style="color:var(--accent);font-size:12px;cursor:pointer" onclick="openNPCPicker(2)">＋ 選択</div>`
             }
+            ${posSelector(2)}
+          </div>
+          <div class="lobby-slot ${lb.npc3?'filled':''}" style="padding-bottom:6px">
+            <div class="ls-label" onclick="openNPCPicker(3)" style="cursor:pointer">NPC ③ ＋</div>
+            ${lb.npc3
+              ? `<div class="ls-name" style="display:flex;align-items:center;gap:5px">${charAvatarHtml(lb.npc3,20)} ${lb.npc3.name}</div><div class="ls-sub">${WEAPONS[lb.npc3.weaponId]?.name}</div>`
+              : `<div class="ls-name" style="color:var(--accent);font-size:12px;cursor:pointer" onclick="openNPCPicker(3)">＋ 選択</div>`
+            }
+            ${posSelector(3)}
           </div>
         </div>
 
+        ${templateSlotsHtml('party')}
+
         <div class="label">持ち込みアイテム（最大3つ）</div>
         <div class="item-slots">${itemSlotsHtml}</div>
+        ${templateSlotsHtml('item')}
 
         <div style="margin-top:20px">
           <button class="btn btn-danger" onclick="startRaid()">
@@ -893,6 +962,7 @@ function renderLobby() {
 }
 
 function selectBoss(bossId) { S.lobby.bossId = bossId; renderLobby(); }
+function setLobbyPosition(slotIdx, pos) { S.lobby.positions[slotIdx] = pos; renderLobby(); }
 function openNPCPicker(slot) { S.lobby.selectingNPC = slot; renderLobby(); }
 function openItemPicker(i)   { S.lobby.selectingItem = i;   renderLobby(); }
 function closeOverlay(e) {
@@ -910,9 +980,61 @@ function selectNPC(id) {
   // 自キャラをNPCとして使う場合はNPCフラグを付ける（コピー）
   const npcEntry = { ...npc, isNPC: true };
   if (S.lobby.selectingNPC === 1) S.lobby.npc1 = npcEntry;
-  else S.lobby.npc2 = npcEntry;
+  else if (S.lobby.selectingNPC === 2) S.lobby.npc2 = npcEntry;
+  else S.lobby.npc3 = npcEntry;
   S.lobby.selectingNPC = null;
   renderLobby();
+}
+
+// ── LOBBY TEMPLATES ────────────────────────────────────────
+function savePartyTemplate(i) {
+  const lb = S.lobby;
+  if (!S.partyTemplates) S.partyTemplates = [null, null, null];
+  S.partyTemplates[i] = {
+    npc1Id: lb.npc1?.id || null,
+    npc2Id: lb.npc2?.id || null,
+    npc3Id: lb.npc3?.id || null,
+    positions: { ...lb.positions },
+  };
+  save(); renderLobby();
+}
+function loadPartyTemplate(i) {
+  const t = (S.partyTemplates||[])[i];
+  if (!t) return;
+  function findNpc(id) {
+    if (!id) return null;
+    return TEMPLATE_NPCS.find(n => n.id === id)
+        || S.characters.find(c => c.id === id)
+        || (S.importedChars||[]).find(c => c.id === id) || null;
+  }
+  const lb = S.lobby;
+  lb.npc1 = findNpc(t.npc1Id) ? { ...findNpc(t.npc1Id), isNPC: true } : null;
+  lb.npc2 = findNpc(t.npc2Id) ? { ...findNpc(t.npc2Id), isNPC: true } : null;
+  lb.npc3 = findNpc(t.npc3Id) ? { ...findNpc(t.npc3Id), isNPC: true } : null;
+  lb.positions = { ...t.positions };
+  renderLobby();
+}
+function deletePartyTemplate(i) {
+  if (!S.partyTemplates) return;
+  S.partyTemplates[i] = null;
+  save(); renderLobby();
+}
+function saveItemTemplate(i) {
+  const lb = S.lobby;
+  if (!S.itemTemplates) S.itemTemplates = [null, null, null];
+  S.itemTemplates[i] = { items: [...lb.items] };
+  save(); renderLobby();
+}
+function loadItemTemplate(i) {
+  const t = (S.itemTemplates||[])[i];
+  if (!t) return;
+  S.lobby.items = [...t.items];
+  renderLobby();
+}
+function deleteItemTemplate(i) {
+  if (!S.itemTemplates) return;
+  S.itemTemplates[i] = null;
+  save(); renderLobby();
 }
 
 function openFriendImport() {
@@ -946,6 +1068,7 @@ function startRaid() {
   // NPC未選択の場合はデフォルトテンプレを使う
   const npc1 = lb.npc1 || TEMPLATE_NPCS[0];
   const npc2 = lb.npc2 || TEMPLATE_NPCS[2];
+  const npc3 = lb.npc3 || TEMPLATE_NPCS[1];
 
   function makeCombatant(charDef, isNPC) {
     const st = calcStats(charDef);
@@ -976,11 +1099,15 @@ function startRaid() {
     makeCombatant(myChar, false),
     makeCombatant(npc1, true),
     makeCombatant(npc2, true),
+    makeCombatant(npc3, true),
   ];
 
-  // NPC は後ろから並べる
-  party[1].position = 'mid';
-  party[2].position = 'back';
+  // ロビーで選択したポジションを適用
+  const positions = lb.positions || { 0:'front', 1:'mid', 2:'back', 3:'mid' };
+  party[0].position = positions[0] || 'front';
+  party[1].position = positions[1] || 'mid';
+  party[2].position = positions[2] || 'back';
+  party[3].position = positions[3] || 'mid';
 
   S.battle = {
     bossId: lb.bossId,
@@ -1031,6 +1158,7 @@ function buildTurnOrder() {
 // ── BATTLE FLOW ─────────────────────────────────────────────
 function processNextTurn() {
   const bt = S.battle;
+  if (!bt || bt.phase === 'end') return;
 
   // 全員ターン消化したら新ラウンドへ
   if (bt.currentTurnIdx >= bt.turnOrder.length) {
@@ -1106,6 +1234,7 @@ function startNewRound() {
 // ── NPC TURN ───────────────────────────────────────────────
 function npcTurn(idx) {
   const bt = S.battle;
+  if (!bt || bt.phase === 'end') return;
   const c = bt.party[idx];
   addLog(`${c.name} が行動中...`, 'act');
 
@@ -1139,7 +1268,8 @@ function npcTurn(idx) {
     }
   }
 
-  // first_aid アクティブを持っていたらHP低い味方を回復
+  // first_aid アクティブを持っていたらHP低い味方を回復（AP1消費）
+  let remainingAp = c.ap;
   if ((c.activeSkills||[]).includes('first_aid') && !(c.skillCTs['first_aid']>0)) {
     const target = bt.party.find(p => p.currentHp > 0 && p.currentHp / p.maxHp < 0.5 && p !== c);
     if (target) {
@@ -1149,15 +1279,18 @@ function npcTurn(idx) {
       addLog(`${c.name} が 応急処置 → ${target.name} HP+${heal}`, 'heal');
       if (!bt._anims) bt._anims = [];
       bt._anims.push({ type: 'char_heal', dmg: heal, idx: bt.party.indexOf(target) });
-      nextTurn();
-      renderBattle();
-      return;
+      remainingAp -= 1;
     }
   }
 
-  // 通常攻撃
-  const { dmg: npcDmg, isCrit: npcCrit } = calcDamage(c, bt.boss, {});
-  applyDamageToBoss(npcDmg, c.name + ' の攻撃', npcCrit);
+  // 通常攻撃（残APの範囲で繰り返す・SRはAP2消費なので1回のみ）
+  const apCost = w.attackApCost || 1;
+  const maxAttacks = Math.floor(remainingAp / apCost);
+  for (let i = 0; i < maxAttacks; i++) {
+    if (bt.boss.currentHp <= 0) break;
+    const { dmg: npcDmg, isCrit: npcCrit } = calcDamage(c, bt.boss, {});
+    applyDamageToBoss(npcDmg, c.name + ' の攻撃', npcCrit);
+  }
 
   renderBattle();
   if (bt.boss.currentHp <= 0) { endBattle(true); return; }
@@ -1167,6 +1300,7 @@ function npcTurn(idx) {
 // ── BOSS TURN ──────────────────────────────────────────────
 function bossTurn() {
   const bt = S.battle;
+  if (!bt || bt.phase === 'end') return;
   const boss = bt.boss;
 
   // スタン中は行動しない
@@ -1209,13 +1343,15 @@ function bossTurn() {
     }
   }
 
-  nextTurn();
   renderBattle();
 
-  // 全滅チェック
+  // 全滅チェック（nextTurnより先に行い、全滅なら止める）
   if (bt.party.every(c => c.currentHp <= 0)) {
     setTimeout(() => endBattle(false), delay(500));
+    return;
   }
+
+  nextTurn();
 }
 
 function pickBossTarget(targetType, party) {
@@ -1230,8 +1366,10 @@ function pickBossTarget(targetType, party) {
     alive.sort((a,b) => posOrder[b.position] - posOrder[a.position]);
     return alive[0];
   }
-  // random
-  return alive[Math.floor(Math.random() * alive.length)];
+  // 重み付きランダム：前衛3・中衛2・後衛1
+  const posWeight = { front:3, mid:2, back:1 };
+  const pool = alive.flatMap(c => Array(posWeight[c.position]||1).fill(c));
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 function calcBossDamage(baseAtk, mod, target) {
@@ -1252,7 +1390,8 @@ function applyDamageToChar(c, dmg) {
   const charIdx = bt.party.indexOf(c);
   if (!bt._anims) bt._anims = [];
 
-  let dodge = c.stats.dodge + (c.tempDodgeBonus||0);
+  const posDodgeMod = { front: -5, mid: 0, back: 15 };
+  let dodge = c.stats.dodge + (c.tempDodgeBonus||0) + (posDodgeMod[c.position]||0);
   const roll = Math.random() * 100;
   if (roll < dodge) {
     addLog(`${c.name} は攻撃を回避した！`, 'act');
@@ -1297,7 +1436,7 @@ function playerAttack() {
     addLog(`この位置（${POS_NAMES[c.position]}）からは攻撃できない`, 'sys');
     return;
   }
-  if (!w.canAttackAfterMove && c.hasMoved && !hasQuickDraw) {
+  if (w.canAttackAfterMove === false && c.hasMoved && !hasQuickDraw) {
     addLog(`移動後は${w.name}で攻撃できない`, 'sys');
     return;
   }
@@ -1384,18 +1523,20 @@ function playerMove(pos) {
   const c = bt.party[bt.selectedCharIdx];
   if (c.position === pos) { bt.actionPhase = 'choosing_action'; renderBattle(); return; }
 
+  const w = WEAPONS[c.weaponId];
+  if (w.noMoveAfterAttack && c.hasFiredThisTurn) {
+    addLog(`${w.name}は攻撃後に移動できない`, 'sys');
+    bt.actionPhase = 'choosing_action'; renderBattle(); return;
+  }
   const armor = ARMORS[c.armorId];
   const moveCost = 1 + (armor.moveCostExtra||0);
   if (c.ap < moveCost) { addLog('APが足りない', 'sys'); return; }
 
   c.position = pos;
   c.hasMoved = true;
-  c.ap -= moveCost;
-
-  // シャドウステップ
-  if ((c.passiveSkills||[]).some(id => SKILLS[id]?.effect?.moveEvadeBonus)) {
-    c.tempDodgeBonus = (c.tempDodgeBonus||0) + 15;
-  }
+  // シャドウステップ：移動AP消費なし
+  const hasFreeMove = (c.passiveSkills||[]).some(id => SKILLS[id]?.effect?.freeMoveAp);
+  if (!hasFreeMove) c.ap -= moveCost;
 
   addLog(`${c.name} が ${POS_NAMES[pos]} に移動`, 'act');
   bt.actionPhase = 'choosing_action';
@@ -1538,16 +1679,26 @@ function endBattle(win) {
     money = boss.drops.moneyReward;
 
     // 武器ドロップ（レア確定）
-    const weaponDrop = boss.drops.weapons[Math.floor(Math.random() * boss.drops.weapons.length)];
+    function genBossDrop(entry) {
+      const numSk = RARITY_SKILL_COUNT[entry.rarity] || 1;
+      const skills = [];
+      let activeCount = 0;
+      for (let i = 0; i < numSk; i++) {
+        const s = pickWeightedSkill(entry.rarity, skills, activeCount);
+        if (s) { skills.push(s); if (SKILLS[s]?.type === 'active') activeCount++; }
+      }
+      return { weaponId: entry.weaponId, name: entry.name, rarity: entry.rarity, skills };
+    }
+    const weaponDrop = genBossDrop(boss.drops.weapons[Math.floor(Math.random() * boss.drops.weapons.length)]);
     drops.push({ type:'weapon', ...weaponDrop });
     if (!S.inventory.weapons) S.inventory.weapons = [];
-    S.inventory.weapons.push({ id:'w_'+Date.now(), weaponId:weaponDrop.weaponId, name:weaponDrop.name, rarity:weaponDrop.rarity, skills:weaponDrop.skills||[] });
+    S.inventory.weapons.push({ id:'w_'+Date.now(), ...weaponDrop });
 
     // 10%で2個
     if (Math.random() < 0.1) {
-      const w2 = boss.drops.weapons[Math.floor(Math.random() * boss.drops.weapons.length)];
+      const w2 = genBossDrop(boss.drops.weapons[Math.floor(Math.random() * boss.drops.weapons.length)]);
       drops.push({ type:'weapon', ...w2 });
-      S.inventory.weapons.push({ id:'w_'+Date.now()+'b', weaponId:w2.weaponId, name:w2.name, rarity:w2.rarity, skills:w2.skills||[] });
+      S.inventory.weapons.push({ id:'w_'+Date.now()+'b', ...w2 });
     }
 
     // 素材ドロップ
@@ -3083,7 +3234,10 @@ function renderBattle() {
     const w = WEAPONS[c.weaponId];
     const atkApCost = w.attackApCost || 1;
     const hasQuickDrawR = (c.passiveSkills||[]).some(id => SKILLS[id]?.effect?.attackAfterMove);
-    const canAtk = w.attackSlots.includes(c.position) && (w.canAttackAfterMove || !c.hasMoved || hasQuickDrawR) && c.ap >= atkApCost;
+    const canAtk = w.attackSlots.includes(c.position) && (w.canAttackAfterMove !== false || !c.hasMoved || hasQuickDrawR) && c.ap >= atkApCost;
+    const hasFreeMove = (c.passiveSkills||[]).some(id => SKILLS[id]?.effect?.freeMoveAp);
+    const moveCostR = 1 + (ARMORS[c.armorId]?.moveCostExtra||0);
+    const canMove = (hasFreeMove || c.ap >= moveCostR) && !(w.noMoveAfterAttack && c.hasFiredThisTurn);
     const hasItems = bt.items.length > 0 && c.ap >= 1;
 
     if (bt.actionPhase === 'choosing_action') {
@@ -3122,9 +3276,9 @@ function renderBattle() {
             <div class="action-desc">${bt.items.length}個所持</div>
           </button>
           ${slots.map((id,i) => skillSlotHtml(id,i)).join('')}
-          <button class="action-btn mov" onclick="showMovePanel()">
+          <button class="action-btn mov" onclick="showMovePanel()" ${!canMove?'disabled style="opacity:0.35"':''}>
             🚶 移動
-            <div class="action-desc">AP:1 / ポジション変更</div>
+            <div class="action-desc">${hasFreeMove?'AP消費なし':'AP:1'} / ポジション変更</div>
           </button>
           <button class="action-btn" onclick="endPlayerTurn()" style="background:var(--bg3);border:1px solid var(--border)">
             ✅ ターン終了
