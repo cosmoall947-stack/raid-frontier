@@ -8,7 +8,31 @@
 </head>
 <body>
   <div id="app"></div>
-  <script src="data.js"></script>
-  <script src="game.js"></script>
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-app.js";
+    import { getDatabase, ref, set, get, update, onValue, push, remove, serverTimestamp }
+      from "https://www.gstatic.com/firebasejs/11.9.0/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyA7Lrg2s-5JJkG_BTMKD6ZQto7Y52f5cqw",
+      authDomain: "raid-frontier.firebaseapp.com",
+      databaseURL: "https://raid-frontier-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "raid-frontier",
+      storageBucket: "raid-frontier.firebasestorage.app",
+      messagingSenderId: "566479677356",
+      appId: "1:566479677356:web:c933167cbce75c2937fc09"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    window.RTDB = getDatabase(app);
+    window.RTDB_UTILS = { ref, set, get, update, onValue, push, remove, serverTimestamp };
+
+    // game.js・data.js をモジュール後にロード
+    const ds = document.createElement('script'); ds.src = 'data.js'; document.body.appendChild(ds);
+    ds.onload = () => {
+      const gs = document.createElement('script'); gs.src = 'game.js'; document.body.appendChild(gs);
+    };
+  </script>
 </body>
 </html>

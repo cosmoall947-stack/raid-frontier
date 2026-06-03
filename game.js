@@ -64,6 +64,7 @@ let S = {
   lobby: null,
   partyTemplates: [null, null, null],  // { npc1Id, npc2Id, npc3Id, positions }
   itemTemplates:  [null, null, null],  // { items: [id,id,id] }
+  onlineRoom: null,   // { roomId, playerId, isHost, partySlotIdx }
   // 作成中フォームの一時データ
   createForm: { name:'', weaponId:'', armorId:'', passives:[], actives:[] },
 };
@@ -949,10 +950,15 @@ function renderLobby() {
         <div class="item-slots">${itemSlotsHtml}</div>
         ${templateSlotsHtml('item')}
 
+        ${renderOnlineLobbySection()}
+
         <div style="margin-top:20px">
-          <button class="btn btn-danger" onclick="startRaid()">
-            ⚔️ レイド開始
-          </button>
+          ${S.onlineRoom
+            ? S.onlineRoom.isHost
+              ? `<button class="btn btn-danger" onclick="onlineStartRaid()">⚔️ オンラインレイド開始</button>`
+              : `<div style="text-align:center;color:var(--text2);padding:12px">ホストの開始を待っています...</div>`
+            : `<button class="btn btn-danger" onclick="startRaid()">⚔️ レイド開始</button>`
+          }
         </div>
 
       </div>
@@ -1654,7 +1660,12 @@ function endPlayerTurn() {
 
 function nextTurn() {
   S.battle.currentTurnIdx++;
-  processNextTurn();
+  // オンライン：ホストがFirebaseに同期してから次のターンへ
+  if (S.onlineRoom?.isHost) {
+    onlineSyncBattle().then(() => processNextTurn());
+  } else {
+    processNextTurn();
+  }
 }
 
 // ── WIN/LOSE ─────────────────────────────────────────────
@@ -3227,6 +3238,16 @@ function renderBattle() {
     </div>`;
   }).join('');
 
+  // オンライン：自分のターン待ちオーバーレイ
+  if (S.onlineRoom && bt.phase === 'player_action' && !onlineIsMyTurn()) {
+    const cur = bt.party[bt.turnOrder[bt.currentTurnIdx]];
+    actionsHtml = `<div style="padding:20px;text-align:center;color:var(--text2)">
+      ⏳ <strong style="color:var(--text)">${cur?.name || '?'}</strong> のターンを待っています...
+    </div>`;
+    document.getElementById('app').innerHTML = `<div class="screen">${headerHtml}${bossHtml}${logHtml}${partyHtml}${actionsHtml}</div>`;
+    return;
+  }
+
   // アクション UI
   let actionsHtml = '';
   if (bt.phase === 'player_action' && bt.selectedCharIdx !== null) {
@@ -3430,6 +3451,305 @@ function showMovePanel()  { S.battle.actionPhase = 'choosing_move';  renderBattl
 function showSkillPanel() { S.battle.actionPhase = 'choosing_skill'; renderBattle(); }
 function showItemPanel()  { S.battle.actionPhase = 'choosing_item';  renderBattle(); }
 function backToChoose()   { S.battle.actionPhase = 'choosing_action'; renderBattle(); }
+
+// ── ONLINE MULTIPLAYER ─────────────────────────────────────
+
+let _fbUnsubscribe = null;
+let _heartbeatTimer = null;
+let _disconnectTimer = null;
+
+function onlineGetPlayerId() {
+  let pid = localStorage.getItem('rf_player_id');
+  if (!pid) {
+    pid = 'p_' + Date.now() + '_' + Math.random().toString(36).substr(2,6);
+    localStorage.setItem('rf_player_id', pid);
+  }
+  return pid;
+}
+
+function onlineGenRoomId() {
+  const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from({length:6}, () => c[Math.floor(Math.random()*c.length)]).join('');
+}
+
+async function onlineCreateRoom() {
+  if (!window.RTDB) { alert('Firebase未接続'); return; }
+  const { ref, set } = window.RTDB_UTILS;
+  const playerId = onlineGetPlayerId();
+  const roomId = onlineGenRoomId();
+  const lb = S.lobby;
+  const myChar = S.characters[lb.myCharIndex];
+
+  await set(ref(window.RTDB, `rooms/${roomId}`), {
+    hostId: playerId,
+    bossId: lb.bossId,
+    phase: 'waiting',
+    createdAt: Date.now(),
+    items: lb.items.map(i => i||null),
+    positions: lb.positions,
+    party: {
+      0: onlineCharEntry(myChar, playerId, 0),
+    },
+  });
+
+  S.onlineRoom = { roomId, playerId, isHost: true, partySlotIdx: 0 };
+  onlineStartListener(roomId);
+  renderLobby();
+}
+
+async function onlineJoinRoom(roomId) {
+  if (!window.RTDB) { alert('Firebase未接続'); return; }
+  const { ref, get, update } = window.RTDB_UTILS;
+  const playerId = onlineGetPlayerId();
+  roomId = roomId.trim().toUpperCase();
+
+  const snap = await get(ref(window.RTDB, `rooms/${roomId}`));
+  if (!snap.exists()) { alert('ルームが見つかりません: ' + roomId); return; }
+  const room = snap.val();
+  if (room.phase !== 'waiting') { alert('このルームは既に開始しています'); return; }
+
+  const party = room.party || {};
+  let slotIdx = -1;
+  for (let i = 0; i < 4; i++) { if (!party[i]) { slotIdx = i; break; } }
+  if (slotIdx === -1) { alert('ルームが満員です'); return; }
+
+  const myChar = S.characters[S.lobby.myCharIndex];
+  const updates = {};
+  updates[`rooms/${roomId}/party/${slotIdx}`] = onlineCharEntry(myChar, playerId, slotIdx);
+  await update(ref(window.RTDB), updates);
+
+  S.onlineRoom = { roomId, playerId, isHost: false, partySlotIdx: slotIdx };
+  S.lobby.bossId = room.bossId;
+  onlineStartListener(roomId);
+  renderLobby();
+}
+
+function onlineCharEntry(char, playerId, slotIdx) {
+  return {
+    playerId, slotIdx,
+    name: char.name, weaponId: char.weaponId, armorId: char.armorId,
+    passiveSkills: char.passiveSkills||[], activeSkills: char.activeSkills||[],
+    learnedSkills: char.learnedSkills||[], inventory: char.inventory||{},
+    lastActiveAt: Date.now(),
+  };
+}
+
+function onlineLeaveRoom() {
+  if (_fbUnsubscribe) { _fbUnsubscribe(); _fbUnsubscribe = null; }
+  if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+  if (_disconnectTimer) { clearInterval(_disconnectTimer); _disconnectTimer = null; }
+  if (S.onlineRoom) {
+    const { ref, remove } = window.RTDB_UTILS;
+    remove(ref(window.RTDB, `rooms/${S.onlineRoom.roomId}/party/${S.onlineRoom.partySlotIdx}`));
+  }
+  S.onlineRoom = null;
+  renderLobby();
+}
+
+function onlineStartListener(roomId) {
+  if (_fbUnsubscribe) _fbUnsubscribe();
+  const { ref, onValue } = window.RTDB_UTILS;
+  _fbUnsubscribe = onValue(ref(window.RTDB, `rooms/${roomId}`), snap => {
+    if (!snap.exists()) return;
+    const data = snap.val();
+    if (data.phase === 'battle') {
+      if (!S.onlineRoom?.isHost && data.battle) onlineApplyState(data.battle);
+      else if (S.onlineRoom?.isHost && S.battle) renderBattle();
+    } else if (data.phase === 'waiting') {
+      if (S.screen === 'lobby') renderLobby();
+    }
+  });
+}
+
+function onlineApplyState(battleData) {
+  // 非ホストがFirebaseの状態を受け取って反映
+  if (!S.battle) {
+    // 初回：バトル画面を開く
+    const boss = BOSSES[battleData.bossId];
+    S.battle = {
+      bossId: battleData.bossId,
+      boss: { ...boss, currentHp: battleData.boss.currentHp, maxHp: battleData.boss.maxHp,
+              statusEffects: battleData.boss.statusEffects||[], lastActionId: null },
+      party: battleData.party.map(c => {
+        const st = calcStats(c);
+        return { ...c, maxHp: c.maxHp||st.hp, stats: st,
+                 skillCTs: c.skillCTs||{}, statusEffects: c.statusEffects||[],
+                 tempDodgeBonus: c.tempDodgeBonus||0,
+                 hasMoved: c.hasMoved||false, hasFiredThisTurn: c.hasFiredThisTurn||false,
+                 usedLastStand: c.usedLastStand||false };
+      }),
+      round: battleData.round, currentTurnIdx: battleData.currentTurnIdx,
+      turnOrder: battleData.turnOrder, phase: battleData.phase,
+      log: battleData.log||[], items: battleData.items||[], itemsUsed: {},
+      selectedCharIdx: null, actionPhase: null, pendingSkillId: null,
+    };
+    showScreen('battle');
+  } else {
+    // 差分更新
+    S.battle.party = battleData.party.map((c, i) => {
+      const existing = S.battle.party[i];
+      const st = calcStats(c);
+      return { ...existing, ...c, stats: st };
+    });
+    S.battle.boss = { ...S.battle.boss, ...battleData.boss };
+    S.battle.round = battleData.round;
+    S.battle.currentTurnIdx = battleData.currentTurnIdx;
+    S.battle.turnOrder = battleData.turnOrder;
+    S.battle.log = battleData.log||[];
+    S.battle.phase = battleData.phase;
+    if (battleData.phase === 'end') {
+      endBattle(battleData.win);
+      return;
+    }
+  }
+  renderBattle();
+}
+
+async function onlineSyncBattle() {
+  if (!S.onlineRoom?.isHost || !S.battle) return;
+  const { ref, update } = window.RTDB_UTILS;
+  const { roomId } = S.onlineRoom;
+  const b = S.battle;
+  const data = {
+    bossId: b.bossId,
+    round: b.round,
+    currentTurnIdx: b.currentTurnIdx,
+    turnOrder: b.turnOrder,
+    phase: b.phase,
+    items: b.items||[],
+    party: b.party.map(c => ({
+      name: c.name, weaponId: c.weaponId, armorId: c.armorId,
+      passiveSkills: c.passiveSkills||[], activeSkills: c.activeSkills||[],
+      learnedSkills: c.learnedSkills||[], inventory: c.inventory||{},
+      currentHp: c.currentHp, maxHp: c.maxHp, ap: c.ap, maxAp: c.maxAp,
+      position: c.position, isNPC: !!c.isNPC, playerId: c.playerId||null,
+      hasMoved: !!c.hasMoved, hasFiredThisTurn: !!c.hasFiredThisTurn,
+      tempDodgeBonus: c.tempDodgeBonus||0, skillCTs: c.skillCTs||{},
+      statusEffects: c.statusEffects||[], usedLastStand: !!c.usedLastStand,
+    })),
+    boss: {
+      currentHp: b.boss.currentHp, maxHp: b.boss.maxHp,
+      statusEffects: b.boss.statusEffects||[], lastActionId: b.boss.lastActionId||null,
+    },
+    log: (b.log||[]).slice(-60),
+  };
+  await update(ref(window.RTDB, `rooms/${roomId}`), { battle: data, phase: 'battle' });
+}
+
+async function onlineStartRaid() {
+  if (!S.onlineRoom?.isHost) return;
+  const { ref, get, update } = window.RTDB_UTILS;
+  const { roomId, playerId } = S.onlineRoom;
+
+  // Firebaseのパーティ情報を取得
+  const snap = await get(ref(window.RTDB, `rooms/${roomId}/party`));
+  const fbParty = snap.exists() ? snap.val() : {};
+
+  // 通常のstartRaid()を実行
+  startRaid();
+
+  // 各スロットにplayerIdを設定
+  for (let i = 0; i < 4; i++) {
+    if (fbParty[i]) {
+      S.battle.party[i].playerId = fbParty[i].playerId;
+      // Firebaseから取得したキャラデータで上書き
+      const fc = fbParty[i];
+      const st = calcStats(fc);
+      S.battle.party[i] = { ...S.battle.party[i], ...fc,
+        maxHp: st.hp, currentHp: st.hp, stats: st,
+        ap: 2, maxAp: 2, position: S.battle.party[i].position,
+        isNPC: fc.playerId !== playerId && !fc.playerId ? true : false,
+        skillCTs: {}, statusEffects: [], hasMoved: false,
+        hasFiredThisTurn: false, tempDodgeBonus: 0, usedLastStand: false,
+      };
+    }
+  }
+  // 自分のplayerIdを自分のスロットに
+  S.battle.party[S.onlineRoom.partySlotIdx].playerId = playerId;
+  S.battle.party[S.onlineRoom.partySlotIdx].isNPC = false;
+
+  // ハートビート開始
+  onlineStartHeartbeat();
+  onlineStartDisconnectWatcher();
+
+  await onlineSyncBattle();
+  await update(ref(window.RTDB, `rooms/${roomId}`), { phase: 'battle' });
+}
+
+function onlineIsMyTurn() {
+  if (!S.onlineRoom || !S.battle) return true;
+  const cur = S.battle.turnOrder?.[S.battle.currentTurnIdx];
+  if (cur === undefined) return false;
+  if (cur.type === 'boss') return false;
+  const c = S.battle.party[cur.idx];
+  return c?.playerId === S.onlineRoom.playerId;
+}
+
+function onlineStartHeartbeat() {
+  if (_heartbeatTimer) clearInterval(_heartbeatTimer);
+  _heartbeatTimer = setInterval(() => {
+    if (!S.onlineRoom || !S.battle) return;
+    const { ref, update } = window.RTDB_UTILS;
+    update(ref(window.RTDB), {
+      [`rooms/${S.onlineRoom.roomId}/party/${S.onlineRoom.partySlotIdx}/lastActiveAt`]: Date.now()
+    });
+  }, 20000);
+}
+
+function onlineStartDisconnectWatcher() {
+  if (_disconnectTimer) clearInterval(_disconnectTimer);
+  _disconnectTimer = setInterval(() => {
+    if (!S.onlineRoom?.isHost || !S.battle) return;
+    const now = Date.now();
+    S.battle.party.forEach((c, i) => {
+      if (c.isNPC || !c.playerId || c.playerId === S.onlineRoom.playerId) return;
+      if (c.lastActiveAt && now - c.lastActiveAt > 60000) {
+        addLog(`⚠️ ${c.name} が切断されました（NPCが引き継ぎ）`, 'sys');
+        c.isNPC = true;
+        c.playerId = null;
+        onlineSyncBattle();
+        renderBattle();
+      }
+    });
+  }, 10000);
+}
+
+// ── ONLINE LOBBY UI ────────────────────────────────────────
+
+function renderOnlineLobbySection() {
+  const or = S.onlineRoom;
+  if (!or) {
+    // 未接続：作成 or 参加
+    return `
+      <div class="label" style="margin-top:16px">🌐 オンラインレイド</div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn" style="flex:1;font-size:13px" onclick="onlineCreateRoom()">ルームを作成</button>
+        <div style="flex:1;display:flex;gap:4px">
+          <input id="joinRoomInput" placeholder="ルームID" maxlength="6"
+            style="flex:1;padding:8px;border-radius:6px;border:1px solid var(--border);
+            background:var(--bg2);color:var(--text);font-size:13px;text-transform:uppercase">
+          <button class="btn" style="font-size:13px;padding:8px 12px"
+            onclick="onlineJoinRoom(document.getElementById('joinRoomInput').value)">参加</button>
+        </div>
+      </div>`;
+  }
+  // 接続済み
+  const copyBtn = `<button onclick="navigator.clipboard.writeText('${or.roomId}');this.textContent='✓ コピー済'"
+    style="font-size:11px;padding:2px 8px;border-radius:4px;border:none;cursor:pointer;background:var(--bg3);color:var(--text2)">
+    コピー</button>`;
+  return `
+    <div class="label" style="margin-top:16px">🌐 オンラインレイド</div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;margin-top:6px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:12px;color:var(--text2)">${or.isHost ? '🏠 ホスト' : '👤 参加者'}</span>
+        <button onclick="onlineLeaveRoom()" style="font-size:11px;padding:2px 8px;border-radius:4px;border:none;cursor:pointer;background:var(--bg3);color:var(--danger)">退出</button>
+      </div>
+      <div style="font-size:14px;font-weight:700;letter-spacing:3px;text-align:center;color:var(--pink);margin-bottom:4px">
+        ${or.roomId} ${copyBtn}
+      </div>
+      <div id="onlinePartyStatus" style="font-size:11px;color:var(--text2);text-align:center">参加者を待っています...</div>
+    </div>`;
+}
 
 // ── LOG ─────────────────────────────────────────────────────
 function addLog(msg, cls='') {
