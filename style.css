@@ -264,7 +264,6 @@ body {
   padding: 10px 12px;
   display: flex;
   gap: 7px;
-  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .char-battle-card {
@@ -272,23 +271,86 @@ body {
   background: var(--bg2);
   border: 2px solid var(--border);
   border-radius: 10px;
-  padding: 9px 7px;
+  padding: 8px 7px 0 7px;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
   min-width: 0;
   position: relative;
+  overflow: hidden;
 }
 .char-battle-card.active   { border-color: var(--accent); background: #58a6ff11; }
 .char-battle-card.dead     { opacity: 0.35; filter: grayscale(1); pointer-events: none; }
 .char-battle-card.npc-card { border-style: dashed; }
-.cbc-name { font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cbc-hp   { font-size: 11px; color: var(--text2); margin-top: 2px; }
-.cbc-pos  { margin-top: 4px; }
-.npc-label { position: absolute; top: 4px; right: 4px; font-size: 9px; color: var(--text2); background: var(--bg3); padding: 1px 4px; border-radius: 3px; }
-.ap-dots { display: flex; gap: 3px; margin-top: 5px; }
-.ap-dot { width: 7px; height: 7px; border-radius: 50%; }
-.ap-on  { background: var(--accent); }
-.ap-off { background: var(--border); }
+
+/* カード内レイアウト：左テキスト・右キャラ画像 */
+.cbc-inner {
+  display: flex;
+  gap: 4px;
+  align-items: flex-start;
+}
+.cbc-left  { flex: 1; min-width: 0; }
+.cbc-right {
+  width: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  opacity: 0.7;
+  /* 将来的に画像を設定したときは object-fit: cover */
+}
+.cbc-right img {
+  width: 36px;
+  height: 44px;
+  object-fit: cover;
+  opacity: 0.7;
+  border-radius: 4px;
+}
+
+.cbc-name { font-size: 11px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cbc-pos  { margin-top: 3px; }
+.ap-dots  { display: flex; gap: 3px; margin-top: 4px; }
+.ap-dot   { width: 6px; height: 6px; border-radius: 50%; }
+.ap-on    { background: var(--accent); }
+.ap-off   { background: var(--border); }
+.cbc-hp-text { font-size: 10px; color: var(--text2); margin-top: 4px; }
+
+/* HPゲージ：カード横幅いっぱい */
+.cbc-hp-bar {
+  width: 100%;
+  height: 5px;
+  background: var(--bg3);
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.cbc-hp-fill {
+  height: 100%;
+  transition: width 0.4s ease;
+}
+
+/* 武器エリア */
+.battle-weapon-area {
+  padding: 6px 12px 8px;
+  display: flex;
+  gap: 7px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.weapon-slot {
+  flex: 1;
+  background: var(--bg3);
+  border-radius: 6px;
+  padding: 5px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.weapon-slot-icon { font-size: 16px; flex-shrink: 0; }
+.weapon-slot-name { font-size: 10px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.npc-label { position: absolute; top: 3px; right: 4px; font-size: 9px; color: var(--text2); background: var(--bg3); padding: 1px 4px; border-radius: 3px; }
 
 .battle-actions-area {
   padding: 10px 12px;
@@ -420,6 +482,47 @@ body {
 .item-slot-icon { font-size: 20px; }
 .item-slot-name { font-size: 10px; color: var(--text2); margin-top: 3px; }
 
+/* ── DROP REVEAL ── */
+.drop-box-wrap {
+  text-align: center;
+  padding: 20px 16px;
+}
+.drop-box {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg3);
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  padding: 28px 40px;
+  cursor: pointer;
+  animation: drop-box-pulse 1.6s ease-in-out infinite;
+  user-select: none;
+}
+.drop-box:active { transform: scale(0.95); }
+.drop-box-icon { font-size: 52px; }
+.drop-box-label { font-size: 14px; font-weight: 700; color: var(--accent); }
+.drop-box-sub { font-size: 11px; color: var(--text2); }
+
+@keyframes drop-box-pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(88,166,255,0.3); border-color: var(--accent); }
+  50%       { box-shadow: 0 0 28px rgba(88,166,255,0.8); border-color: #a0cfff; }
+}
+
+.drop-revealed {
+  animation: drop-reveal 0.55s cubic-bezier(0.22,1,0.36,1) both;
+}
+@keyframes drop-reveal {
+  0%   { opacity: 0; transform: scale(0.75) translateY(12px); filter: brightness(3); }
+  60%  { opacity: 1; transform: scale(1.06) translateY(-2px); filter: brightness(1.4); }
+  100% { transform: scale(1)  translateY(0);  filter: brightness(1); }
+}
+
+.rarity-glow-legend { box-shadow: 0 0 22px rgba(247,120,186,0.85) !important; border-color: var(--pink) !important; }
+.rarity-glow-epic   { box-shadow: 0 0 18px rgba(163,113,247,0.75) !important; border-color: var(--purple) !important; }
+.rarity-glow-rare   { box-shadow: 0 0 14px rgba(88,166,255,0.65)  !important; border-color: var(--accent) !important; }
+
 /* ── RESULT SCREEN ── */
 .result-banner {
   text-align: center;
@@ -472,3 +575,63 @@ body {
 .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
 .empty-state h3 { font-size: 16px; color: var(--text); margin-bottom: 6px; }
 .empty-state p  { font-size: 13px; }
+
+/* ── BATTLE ANIMATIONS ── */
+
+/* ダメージ数字 */
+@keyframes dmg-float {
+  0%   { transform: translateY(0) scale(1);   opacity: 1; }
+  20%  { transform: translateY(-10px) scale(1.25); }
+  100% { transform: translateY(-54px) scale(0.9); opacity: 0; }
+}
+.dmg-number {
+  position: fixed;
+  font-size: 22px;
+  font-weight: 900;
+  color: #fca5a5;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.9), 0 0 8px rgba(248,81,73,0.6);
+  pointer-events: none;
+  z-index: 999;
+  animation: dmg-float 0.85s ease-out forwards;
+  user-select: none;
+  letter-spacing: -0.5px;
+}
+.dmg-number.is-heal { color: #86efac; text-shadow: 0 2px 4px rgba(0,0,0,0.9), 0 0 8px rgba(63,185,80,0.6); }
+.dmg-number.is-crit { color: #f778ba; font-size: 30px; text-shadow: 0 2px 6px rgba(0,0,0,0.9), 0 0 12px rgba(247,120,186,0.8); }
+.dmg-number.is-miss { color: #8b949e; font-size: 15px; font-style: italic; }
+
+/* ヒットフラッシュ（赤） */
+@keyframes flash-hit {
+  0%, 100% { box-shadow: none; background-color: inherit; }
+  35%       { box-shadow: 0 0 0 2px #f85149, inset 0 0 20px rgba(248,81,73,0.35); }
+}
+/* ヒールフラッシュ（緑） */
+@keyframes flash-heal {
+  0%, 100% { box-shadow: none; }
+  35%       { box-shadow: 0 0 0 2px #3fb950, inset 0 0 20px rgba(63,185,80,0.35); }
+}
+/* ボスシェイク */
+@keyframes boss-shake {
+  0%,100% { transform: translateX(0); }
+  20%     { transform: translateX(-6px); }
+  50%     { transform: translateX(5px); }
+  80%     { transform: translateX(-4px); }
+}
+.anim-hit   { animation: flash-hit   0.4s ease; }
+.anim-heal  { animation: flash-heal  0.4s ease; }
+.anim-shake { animation: boss-shake  0.35s ease; }
+
+/* ログ折りたたみ */
+.battle-log-wrap { flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.battle-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 14px;
+  background: var(--bg2);
+  cursor: pointer;
+  user-select: none;
+}
+.battle-log-header span { font-size: 11px; color: var(--text2); }
+.battle-log.collapsed { height: 72px; }
+.battle-log.expanded  { height: 160px; }
