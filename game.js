@@ -3247,8 +3247,6 @@ function renderBattle() {
     actionsHtml = `<div style="padding:20px;text-align:center;color:var(--text2)">
       ⏳ <strong style="color:var(--text)">${cur?.name || '?'}</strong> のターンを待っています...
     </div>`;
-    document.getElementById('app').innerHTML = `<div class="screen">${headerHtml}${bossHtml}${logHtml}${partyHtml}${actionsHtml}</div>`;
-    return;
   }
   if (bt.phase === 'player_action' && bt.selectedCharIdx !== null) {
     const c = bt.party[bt.selectedCharIdx];
