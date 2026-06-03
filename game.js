@@ -3238,6 +3238,9 @@ function renderBattle() {
     </div>`;
   }).join('');
 
+  // アクション UI
+  let actionsHtml = '';
+
   // オンライン：自分のターン待ちオーバーレイ
   if (S.onlineRoom && bt.phase === 'player_action' && !onlineIsMyTurn()) {
     const cur = bt.party[bt.turnOrder[bt.currentTurnIdx]];
@@ -3247,9 +3250,6 @@ function renderBattle() {
     document.getElementById('app').innerHTML = `<div class="screen">${headerHtml}${bossHtml}${logHtml}${partyHtml}${actionsHtml}</div>`;
     return;
   }
-
-  // アクション UI
-  let actionsHtml = '';
   if (bt.phase === 'player_action' && bt.selectedCharIdx !== null) {
     const c = bt.party[bt.selectedCharIdx];
     const w = WEAPONS[c.weaponId];
