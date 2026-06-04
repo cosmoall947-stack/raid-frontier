@@ -3559,48 +3559,70 @@ function onlineStartListener(roomId) {
   });
 }
 
+function onlineMakePartyMember(c) {
+  const st = calcStats(c);
+  return {
+    ...c, stats: st,
+    maxHp: c.maxHp || st.hp,
+    currentHp: c.currentHp !== undefined ? c.currentHp : st.hp,
+    ap: c.ap !== undefined ? c.ap : 2, maxAp: 2,
+    skillCTs: c.skillCTs||{}, statusEffects: c.statusEffects||[],
+    tempDodgeBonus: c.tempDodgeBonus||0,
+    hasMoved: !!c.hasMoved, hasFiredThisTurn: !!c.hasFiredThisTurn,
+    usedLastStand: !!c.usedLastStand,
+  };
+}
+
 function onlineApplyState(battleData) {
   // 非ホストがFirebaseの状態を受け取って反映
+  const bossDef = BOSSES[battleData.bossId];
+  const bossState = {
+    ...bossDef,
+    currentHp: battleData.boss.currentHp,
+    maxHp: battleData.boss.maxHp,
+    buffs: [],  // renderBattle()が参照するので必須
+    statusEffects: battleData.boss.statusEffects||[],
+    lastActionId: battleData.boss.lastActionId||null,
+  };
+
   if (!S.battle) {
     // 初回：バトル画面を開く
-    const boss = BOSSES[battleData.bossId];
     S.battle = {
       bossId: battleData.bossId,
-      boss: { ...boss, currentHp: battleData.boss.currentHp, maxHp: battleData.boss.maxHp,
-              statusEffects: battleData.boss.statusEffects||[], lastActionId: null },
-      party: battleData.party.map(c => {
-        const st = calcStats(c);
-        return { ...c, maxHp: c.maxHp||st.hp, stats: st,
-                 skillCTs: c.skillCTs||{}, statusEffects: c.statusEffects||[],
-                 tempDodgeBonus: c.tempDodgeBonus||0,
-                 hasMoved: c.hasMoved||false, hasFiredThisTurn: c.hasFiredThisTurn||false,
-                 usedLastStand: c.usedLastStand||false };
-      }),
-      round: battleData.round, currentTurnIdx: battleData.currentTurnIdx,
-      turnOrder: battleData.turnOrder, phase: battleData.phase,
-      log: battleData.log||[], items: battleData.items||[], itemsUsed: {},
-      selectedCharIdx: null, actionPhase: null, pendingSkillId: null,
+      boss: bossState,
+      party: battleData.party.map(onlineMakePartyMember),
+      round: battleData.round,
+      currentTurnIdx: battleData.currentTurnIdx,
+      turnOrder: battleData.turnOrder,
+      phase: battleData.phase,
+      log: battleData.log||[],
+      items: battleData.items||[],
+      itemsUsed: {},
+      selectedCharIdx: null,
+      actionPhase: null,
+      pendingSkillId: null,
+      logCollapsed: false,
+      _anims: [],
     };
     showScreen('battle');
   } else {
     // 差分更新
     S.battle.party = battleData.party.map((c, i) => {
-      const existing = S.battle.party[i];
-      const st = calcStats(c);
-      return { ...existing, ...c, stats: st };
+      return onlineMakePartyMember({ ...(S.battle.party[i]||{}), ...c });
     });
-    S.battle.boss = { ...S.battle.boss, ...battleData.boss };
+    S.battle.boss = bossState;
     S.battle.round = battleData.round;
     S.battle.currentTurnIdx = battleData.currentTurnIdx;
     S.battle.turnOrder = battleData.turnOrder;
     S.battle.log = battleData.log||[];
     S.battle.phase = battleData.phase;
+    S.battle._anims = [];
     if (battleData.phase === 'end') {
       endBattle(battleData.win);
       return;
     }
+    renderBattle();
   }
-  renderBattle();
 }
 
 async function onlineSyncBattle() {
