@@ -1666,6 +1666,8 @@ function consumeAP(cost) {
 
 function endPlayerTurn() {
   const bt = S.battle;
+  // オンライン：自分のターンでない場合は操作を無視
+  if (S.onlineRoom && !onlineIsMyTurn()) return;
   bt.actionPhase = null;
   bt.selectedCharIdx = null;
   bt.phase = 'resolving';
@@ -3256,14 +3258,14 @@ function renderBattle() {
   // アクション UI
   let actionsHtml = '';
 
-  // オンライン：自分のターン待ちオーバーレイ
+  // オンライン：自分のターン待ちオーバーレイ（行動UIを完全にブロック）
   if (S.onlineRoom && bt.phase === 'player_action' && !onlineIsMyTurn()) {
-    const cur = bt.party[bt.turnOrder[bt.currentTurnIdx]];
+    const curEntity = bt.turnOrder[bt.currentTurnIdx];
+    const cur = curEntity?.type === 'player' ? bt.party[curEntity.idx] : null;
     actionsHtml = `<div style="padding:20px;text-align:center;color:var(--text2)">
       ⏳ <strong style="color:var(--text)">${cur?.name || '?'}</strong> のターンを待っています...
     </div>`;
-  }
-  if (bt.phase === 'player_action' && bt.selectedCharIdx !== null) {
+  } else if (bt.phase === 'player_action' && bt.selectedCharIdx !== null) {
     const c = bt.party[bt.selectedCharIdx];
     const w = WEAPONS[c.weaponId];
     const atkApCost = w.attackApCost || 1;
@@ -3448,6 +3450,8 @@ function selectPlayerChar(idx) {
   const c = bt.party[idx];
   if (c.isNPC || c.currentHp <= 0) return;
   if (bt.phase !== 'player_action') return;
+  // オンライン：自分のキャラ以外は操作不可
+  if (S.onlineRoom && c.playerId !== S.onlineRoom.playerId) return;
   // 自分のターンのキャラのみ操作可
   const entity = bt.turnOrder[bt.currentTurnIdx];
   if (!entity || entity.type !== 'player' || entity.idx !== idx) {
