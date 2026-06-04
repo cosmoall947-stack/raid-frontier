@@ -140,7 +140,6 @@ function calcStats(char) {
     if (e.dodgeRate)       dodge     += e.dodgeRate;
     if (e.critRate)        crit      += e.critRate;
     if (e.atkMod)          atkMod    += e.atkMod;
-    if (e.atkPenalty)      atkMod    -= e.atkPenalty;
     if (e.speedBonus)      speed     += e.speedBonus;
     if (e.hpBonus)         hp        += e.hpBonus;
     if (e.damageReduction) reduction += e.damageReduction;
@@ -1218,12 +1217,6 @@ function processNextTurn() {
 function resetTurnState(idx) {
   const c = S.battle.party[idx];
   c.ap = c.maxAp;
-  if (c.nextTurnApPenalty) {
-    const pen = c.nextTurnApPenalty;
-    c.ap = Math.max(0, c.ap - pen);
-    addLog(`${c.name}：反動でAP-${pen}`, 'sys');
-    c.nextTurnApPenalty = 0;
-  }
   c.hasMoved = false;
   c.hasFiredThisTurn = false;
   c.tempDodgeBonus = 0;
@@ -1409,8 +1402,6 @@ function calcBossDamage(baseAtk, mod, target) {
     const sk = (target.passiveSkills||[]).map(id=>SKILLS[id]).find(s=>s?.effect?.damageReduction);
     if (sk) reduction += sk.effect.damageReduction;
   }
-  // アーマーブレイク装備中は自分の軽減も0（トレードオフ）
-  if ((target.passiveSkills||[]).some(id => SKILLS[id]?.effect?.selfVulnerable)) reduction = 0;
   reduction = clamp(reduction, 0, 0.8);
   return Math.max(1, Math.round(dmg * (1 - reduction)));
 }
@@ -1439,8 +1430,7 @@ function applyDamageToChar(c, dmg) {
     if (c.currentHp - dmg <= 0) {
       c.usedLastStand = true;
       c.currentHp = 1;
-      c.lastStandDebuff = true; // 次ターンATK-30%
-      addLog(`${c.name} の「ラストスタンド」発動！ HP1で耐えた！次ターンATK-30%`, 'sys');
+      addLog(`${c.name} の「ラストスタンド」発動！ HP1で耐えた！`, 'sys');
       bt._anims.push({ type: 'char_dmg', dmg: 1, idx: charIdx });
       return;
     }
@@ -1513,12 +1503,6 @@ function playerAttack() {
 function calcDamage(attacker, target, opts) {
   const st = attacker.stats;
   let atk = st.atk * (opts.atkMod || 1.0);  // サプレッション等のATKボーナス
-  // ラストスタンド発動後の疲弊：ATK-30%（1ターン）
-  if (attacker.lastStandDebuff) {
-    atk = Math.round(atk * 0.7);
-    addLog(`疲弊（ラストスタンド後）：ATK-30%`, 'sys');
-    attacker.lastStandDebuff = false;
-  }
   let mod = opts.damageMod || 1.0;
 
   // ハンターズアイ
@@ -1607,29 +1591,7 @@ function playerUseActiveSkill(skillId) {
     }
     const { dmg: skDmg, isCrit: skCrit } = calcDamage(c, bt.boss, { damageMod: e.damageMod });
     applyDamageToBoss(skDmg, c.name + ' の ' + sk.name, skCrit);
-    if (e.pushBack) {
-      bt.boss.statusEffects.push({ type:'stun', turns:1 });
-      addLog(`敵が後退した！（次のボス行動をスキップ）`, 'act');
-    }
-    if (e.nextTurnApPenalty) {
-      c.nextTurnApPenalty = (c.nextTurnApPenalty||0) + e.nextTurnApPenalty;
-      addLog(`反動：次ターンAP-${e.nextTurnApPenalty}`, 'sys');
-    }
     checkWinCondition();
-  } else if (e.revive) {
-    const knocked = bt.party.filter(m => m.currentHp <= 0);
-    if (knocked.length === 0) {
-      addLog('戦闘不能の味方がいない', 'sys');
-      c.ap += sk.apCost; c.skillCTs[skillId] = 0; return;
-    }
-    const tgt = knocked[0];
-    tgt.currentHp = Math.max(1, Math.round(tgt.maxHp * e.reviveHp));
-    addLog(`${c.name} が ${sk.name}！ ${tgt.name} をHP${tgt.currentHp}で復活`, 'heal');
-    if (e.selfHpCost) {
-      const cost = Math.round(c.maxHp * e.selfHpCost);
-      c.currentHp = Math.max(1, c.currentHp - cost);
-      addLog(`${c.name} のHP-${cost}（蘇生の代償）`, 'dmg');
-    }
   } else if (e.healPct) {
     // 回復
     const heal = Math.round(c.maxHp * e.healPct);
@@ -2921,13 +2883,6 @@ function questAction(type) {
       addQuestLog(`サプレッション発動！ ATK+15%`, 'act');
     }
     char.attackedLastRound = true;
-    // ラストスタンド後の疲弊（クエスト）
-    let lastStandAtkMod = 1.0;
-    if (char.lastStandDebuff) {
-      lastStandAtkMod = 0.7;
-      addQuestLog(`疲弊（ラストスタンド後）：ATK-30%`, 'sys');
-      char.lastStandDebuff = false;
-    }
     const hitCount = w.multiHit || 1;
     const hitMod   = w.hitDamageMod || 1.0;
     const target = qs.enemies.find(e => e.currentHp > 0);
@@ -2936,7 +2891,7 @@ function questAction(type) {
       const st = char.stats;
       for (let h = 0; h < hitCount; h++) {
         if (target.currentHp <= 0) break;
-        let mod = hitMod * suppressionMod * lastStandAtkMod;
+        let mod = hitMod * suppressionMod;
         if ((char.passiveSkills||[]).some(id => SKILLS[id]?.effect?.lowHpBonus) && target.currentHp / target.maxHp < 0.5) mod += 0.2;
         let reduction = target.reduction;
         if ((char.passiveSkills||[]).some(id => SKILLS[id]?.effect?.armorBreak)) reduction = 0;
@@ -2954,10 +2909,6 @@ function questAction(type) {
       if ((char.passiveSkills||[]).some(id => SKILLS[id]?.effect?.killExtraAttack) && target.currentHp <= 0) {
         const next = qs.enemies.find(e => e.currentHp > 0);
         if (next) {
-          // トレードオフ：発動時HP10%消費
-          const kiCost = Math.round(char.maxHp * 0.1);
-          char.currentHp = Math.max(1, char.currentHp - kiCost);
-          addQuestLog(`キラーインスティンクト発動！ HP-${kiCost}`, 'dmg');
           let d2 = Math.max(1, Math.round(st.atk * (1 - next.reduction)));
           next.currentHp = Math.max(0, next.currentHp - d2);
           addQuestLog(`キラーインスティンクト！ ${next.name} に追加 ${d2} ダメージ`, 'act');
@@ -2997,18 +2948,7 @@ function questUseSkill(skillId) {
       dmg = Math.max(1, dmg);
       target.currentHp = Math.max(0, target.currentHp - dmg);
       addQuestLog(`${char.name} の ${sk.name} → ${target.name} に ${dmg} ダメージ${target.currentHp<=0?'（撃破！）':''}`, 'dmg');
-      if (e.pushBack) {
-        qs.skipEnemyTurns = (qs.skipEnemyTurns||0) + qs.enemies.filter(en => en.currentHp > 0).length;
-        addQuestLog(`敵が後退した！（次の敵行動をスキップ）`, 'act');
-      }
-      if (e.nextTurnApPenalty) {
-        addQuestLog(`反動：次ターンAP-${e.nextTurnApPenalty}（クエストでは効果なし）`, 'sys');
-      }
     }
-  } else if (e.revive) {
-    addQuestLog('クエストでは蘇生できない', 'sys');
-    char.skillCTs[skillId] = 0; char.ap = (char.ap||0) + sk.apCost;
-    questAfterPlayerAction(); return;
   } else if (e.healPct || e.selfHeal) {
     const ratio = e.healPct || e.selfHeal;
     const heal = Math.round(char.maxHp * ratio);
@@ -3107,8 +3047,7 @@ function questEnemyPhase() {
     if ((char.passiveSkills||[]).some(id => SKILLS[id]?.effect?.lastStand) && !char.usedLastStand && char.currentHp - dmg <= 0) {
       char.usedLastStand = true;
       char.currentHp = 1;
-      char.lastStandDebuff = true; // 次の攻撃でATK-30%
-      addQuestLog(`ラストスタンド発動！ HP1で耐えた！次の攻撃ATK-30%`, 'sys');
+      addQuestLog(`ラストスタンド発動！ HP1で耐えた！`, 'sys');
       qs._anims.push({ type: 'player_dmg', dmg: 1 });
       return;
     }
