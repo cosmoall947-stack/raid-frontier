@@ -1182,20 +1182,35 @@ function processNextTurn() {
       processNextTurn();
       return;
     }
-    // NPCは自動処理
+    // NPCは自動処理（オンライン時はホストのみ実行）
     if (c.isNPC) {
-      setTimeout(() => { npcTurn(entity.idx); }, delay(600));
-    } else {
-      // プレイヤーターン
+      if (!S.onlineRoom || S.onlineRoom.isHost) {
+        setTimeout(() => { npcTurn(entity.idx); }, delay(600));
+      }
+      // 参加者はFirebaseの更新を待つ
+      return;
+    }
+    // オンライン：他プレイヤーのターンはホストがFirebase同期して待機
+    if (S.onlineRoom && c.playerId && c.playerId !== S.onlineRoom.playerId) {
+      bt.phase = 'player_action';
       bt.selectedCharIdx = entity.idx;
       bt.actionPhase = 'choosing_action';
-      bt.phase = 'player_action';
       resetTurnState(entity.idx);
-      renderBattle();
+      if (S.onlineRoom.isHost) onlineSyncBattle(); // 参加者にターンを通知
+      renderBattle(); // "待機中"オーバーレイ表示
+      return;
     }
+    // 自分のターン
+    bt.selectedCharIdx = entity.idx;
+    bt.actionPhase = 'choosing_action';
+    bt.phase = 'player_action';
+    resetTurnState(entity.idx);
+    renderBattle();
   } else {
-    // ボスターン
-    setTimeout(() => { bossTurn(); }, delay(600));
+    // ボスターン（オンライン時はホストのみ実行）
+    if (!S.onlineRoom || S.onlineRoom.isHost) {
+      setTimeout(() => { bossTurn(); }, delay(600));
+    }
   }
 }
 
@@ -1660,8 +1675,8 @@ function endPlayerTurn() {
 
 function nextTurn() {
   S.battle.currentTurnIdx++;
-  // オンライン：ホストがFirebaseに同期してから次のターンへ
-  if (S.onlineRoom?.isHost) {
+  // オンライン：自分のターンを終えたらFirebaseに同期してから次へ
+  if (S.onlineRoom) {
     onlineSyncBattle().then(() => processNextTurn());
   } else {
     processNextTurn();
@@ -3550,9 +3565,10 @@ function onlineStartListener(roomId) {
   _fbUnsubscribe = onValue(ref(window.RTDB, `rooms/${roomId}`), snap => {
     if (!snap.exists()) return;
     const data = snap.val();
-    if (data.phase === 'battle') {
-      if (!S.onlineRoom?.isHost && data.battle) onlineApplyState(data.battle);
-      else if (S.onlineRoom?.isHost && S.battle) renderBattle();
+    // 自分が書き込んだ更新は無視
+    if (data.lastUpdatedBy === S.onlineRoom?.playerId) return;
+    if (data.phase === 'battle' && data.battle) {
+      onlineApplyState(data.battle);
     } else if (data.phase === 'waiting') {
       if (S.screen === 'lobby') renderLobby();
     }
@@ -3615,18 +3631,37 @@ function onlineApplyState(battleData) {
     S.battle.currentTurnIdx = battleData.currentTurnIdx;
     S.battle.turnOrder = battleData.turnOrder;
     S.battle.log = battleData.log||[];
-    S.battle.phase = battleData.phase;
     S.battle._anims = [];
     if (battleData.phase === 'end') {
       endBattle(battleData.win);
       return;
     }
-    renderBattle();
+    // 自分のターンかチェックして行動UIをセット
+    const curTurn = battleData.turnOrder?.[battleData.currentTurnIdx];
+    if (curTurn?.type === 'player') {
+      const c = S.battle.party[curTurn.idx];
+      if (c?.playerId === S.onlineRoom?.playerId) {
+        // 自分のターン：行動UIを有効化
+        S.battle.phase = 'player_action';
+        S.battle.selectedCharIdx = curTurn.idx;
+        S.battle.actionPhase = 'choosing_action';
+        resetTurnState(curTurn.idx);
+        renderBattle();
+        return;
+      }
+    }
+    S.battle.phase = battleData.phase;
+    // ホストはNPC/ボスターンを継続処理
+    if (S.onlineRoom?.isHost) {
+      processNextTurn();
+    } else {
+      renderBattle();
+    }
   }
 }
 
 async function onlineSyncBattle() {
-  if (!S.onlineRoom?.isHost || !S.battle) return;
+  if (!S.onlineRoom || !S.battle) return;
   const { ref, update } = window.RTDB_UTILS;
   const { roomId } = S.onlineRoom;
   const b = S.battle;
@@ -3653,7 +3688,7 @@ async function onlineSyncBattle() {
     },
     log: (b.log||[]).slice(-60),
   };
-  await update(ref(window.RTDB, `rooms/${roomId}`), { battle: data, phase: 'battle' });
+  await update(ref(window.RTDB, `rooms/${roomId}`), { battle: data, phase: 'battle', lastUpdatedBy: S.onlineRoom.playerId });
 }
 
 async function onlineStartRaid() {
